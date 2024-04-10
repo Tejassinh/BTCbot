@@ -1,0 +1,468 @@
+import ccxt
+import time
+from time import sleep
+import datetime
+from itertools import product
+import schedule
+import pandas as pd
+import numpy as np
+
+api_key = 'Your_Key'
+secret = 'Your_Secret_key'
+
+exchange = ccxt.mexc({
+    'apiKey': api_key,
+    'secret': secret,
+    'enableRateLimit': False,
+    }
+)
+
+def fetch_data_ohlcv(symbol, days, timeframe, chunk_size=500):
+    # Function to fetch OHLCV data
+    now = exchange.milliseconds() -1
+    one_day_in_ms = 24 * 60 * 60 * 1000  # Number of milliseconds in a day
+    one_year_ago = now - days * one_day_in_ms
+    ohlcv_data = []
+    since = one_year_ago
+    while True:
+          try:
+            ohlcv_chunk = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=chunk_size)
+            if not ohlcv_chunk:
+                break
+            ohlcv_data.extend(ohlcv_chunk)
+            since = ohlcv_chunk[-1][0] + 1  # Set 'since' to the timestamp after the last candle in the chunk
+          except Exception as e:
+            print("Error fetching data:", e)
+            print("Retrying in 5 seconds...")
+            time.sleep(5)  # Wait before retrying
+    df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')  # Convert timestamp to datetime
+    
+    df['Profit/Loss'] = df.apply(lambda x: x['close'] - x['open'], axis=1)
+    df['Result'] = df['Profit/Loss'].apply(lambda x: 'P' if x >= 0 else 'L')
+    sequence = df['Result']
+    return(sequence)
+
+
+
+def processone(sequence, temp):
+    Count_Profit = []
+    Count_Loss = []
+    curpet = temp  # No need for .tolist() since temp is already a list
+    for x in range(12):
+        positive = 0
+        negative = 0
+        x = 12 - x
+        for i in range(len(sequence) - x):
+            if x <= 1:
+                tempSeq = sequence[i]
+                tempSeq = list(tempSeq)
+            elif x > 1:
+                tempSeq = sequence[i:i + x]
+                tempSeq = list(tempSeq)
+
+            if tempSeq == curpet:
+                    # Check the position after the pattern (i+2)
+                    if sequence[i + x] == 'P':  # Changed iloc[i+x+1] to [i+x]
+                        positive += 1
+                    elif sequence[i + x] == 'L':  # Changed iloc[i+x+1] to [i+x]
+                        negative += 1             
+        curpet.pop(0)    
+        Count_Profit.append(positive)
+        Count_Loss.append(negative)
+    # Creating DataFrame with counts
+    data = {'Count_Profit': Count_Profit, 'Count_Loss': Count_Loss}
+    df = pd.DataFrame(data)
+    return df
+
+def do_prediction(result, d):
+        patterns = ([0] * 12)
+        for i in range(12):
+            if result['Count_Profit'][i] > result['Count_Loss'][i]:
+                patterns[i] = "P"
+            elif result['Count_Profit'][i] < result['Count_Loss'][i]:
+                patterns[i] = "L"
+            elif result['Count_Profit'][i] == result['Count_Loss'][i]:
+                patterns[i] = "EQ"
+        # count_L = patterns.count('L')
+        # count_P = patterns.count('P')
+        # pred = "P" if count_P > count_L else "L"
+        pred=patterns[d]
+        return(pred)
+
+def final_prediction(HA,NP):
+    percentage = 0
+    prediction = "EQ"
+    pcount = 0
+    lcount = 0 
+    for x in range(12):
+        if percentage < HA[x] and NP[x] != "EQ" :
+            percentage = HA[x]
+            prediction = NP[x]
+            if NP[x] == "P":
+                pcount = 1
+                lcount = 0
+            elif NP[x] == "L":
+                pcount = 0
+                lcount = 1   
+        elif percentage == HA[x] and NP[x] == "P":
+            pcount +=1
+            
+        elif percentage == HA[x] and NP[x] == "L":
+            lcount +=1
+            
+    if lcount < pcount:
+        prediction = "P"
+    elif pcount < lcount:
+        prediction = "L"
+    print(f"Final Prediction = {prediction}")
+    return(prediction)
+
+def just_do_it(megaseq):
+    # Define a dictionary to store data for each c value
+    from IPython.display import clear_output
+    data_dict = {}
+    HA =  []
+    NP = []
+    
+    for d in range(12): 
+        # print(f"Working On possition No. {d}")
+        num_positions = 3
+        # Generate column names for positions
+        position_columns = [f'P_{i}' for i in range(1, num_positions + 1)]
+        
+        # Initialize lists for each column
+        dd = []
+        positions = {col: [] for col in position_columns}
+        accuracies = []
+        next_prediction = []
+        
+        for days in range(1,66): 
+                dd.append(days)
+                k = (days+2) * 24
+                sequence = megaseq.iloc[-k:]
+                pattern = sequence[-48:]
+                # print(list(sequence))
+                # print(list(pattern))
+                right = 0
+                wrong = 0
+                # a=0
+                # b=12
+                c = (24* days) + 33
+                for z in range(33,37):
+                    value = "NULL"
+                    a=z
+                    b=z+12
+                    if z == 36:
+                        tempseq = list(sequence.iloc[a:c])
+                        temp = list(pattern.iloc[a:b])
+                        result = processone(tempseq,temp)
+                        # print(result)
+                        # print(tempseq)
+                        # print(temp)
+                        pred = do_prediction(result,d)
+                        # print(f"Next Prediction is : {pred}")
+                        next_prediction.append(pred)
+                    else:
+                        tempseq = list(sequence.iloc[a:c])
+                        temp = list(pattern.iloc[a:b])
+                        nextvalue = list(pattern.iloc[b])
+                        # print(f"temp sequence : {tempseq}")
+                        # print(f"temp  : {temp}")
+                        # print(f"Next value {nextvalue}")
+                        result = processone(tempseq,temp)
+                        pred = do_prediction(result,d)
+                        # print(f"pred {pred}")
+                        # print(f"temp : {temp}")
+                        if pred == pattern.iloc[b]:
+                            right += 1
+                            value = "1"
+        
+                        elif pred =="EQ":
+                            wrong += 1
+                            value = "E"
+                        
+                        else:
+                            wrong+=1
+                            value = "0"
+                        
+                        # a+=1   
+                        b+=1
+                        c+=1
+                        position_name = position_columns[z-33]
+                        positions[position_name].append(value)
+                accuracy = (100*right) / (wrong + right)
+                # print(f"{days}.accuracy in percentage for day {days}: {accuracy}")
+                accuracies.append(accuracy)
+        high = 0
+        index = 0
+        high_prediction = "EQ"
+        for accuracy in accuracies:
+            prediction_next = next_prediction[index]
+            if accuracy >= high and prediction_next != "EQ":
+                high = accuracy
+                high_prediction = prediction_next
+            index+=1
+        
+        HA.append(high)
+        NP.append(high_prediction)
+        # Create DataFrame from the lists
+        # data_dict[d] = {'day': dd}
+        # for position_name, position_values in positions.items():
+        #     data_dict[d][position_name] = position_values
+        # data_dict[d]['Accuracy'] = accuracies
+        # data_dict[d]['next_prediction'] = next_prediction
+    
+        # df = pd.DataFrame(data_dict[d])
+        
+        # # Specify data types for each column
+        # data_types = {position_name: 'str' for position_name in positions.keys()}
+        # data_types['Accuracy'] = 'float'
+        # data_types['next_prediction'] = 'str'
+        # df.to_excel(f'data{d}.xlsx', index=False, engine='openpyxl')
+        # clear_output(wait=True)
+        
+    # for x in range(12):
+    #     print(f"Highest for accurcy ar position {12-x} is {HA[x]} and next prediction is {NP[x]}")
+    final = final_prediction(HA,NP)
+    return(final)
+
+
+def market_buy_order(symbol, amount):
+    while True:  # Keep trying until the order is successfully executed
+        try:
+            order = exchange.create_market_buy_order(
+                symbol=symbol,
+                amount=amount,
+                params={'createMarketBuyOrderRequiresPrice': False}
+            )
+            print("Buy order successfully executed.")
+            break  # Exit the loop if the order is successfully executed
+        except Exception as e:
+            print(f"Error executing buy order: {e}")
+            print("Retrying buy order...")
+            # Add a delay before retrying to avoid flooding the exchange with requests
+            time.sleep(5)  # Adjust the delay as needed
+    return order
+
+def market_sell_order(symbol, amount):
+    while True:  # Keep trying until the order is successfully executed
+        try:
+            order = exchange.create_market_sell_order(
+                symbol=symbol,
+                amount=amount,
+                params={'createMarketSellOrderRequiresPrice': False}
+            )
+            print("Sell order successfully executed.")
+            break  # Exit the loop if the order is successfully executed
+        except Exception as e:
+            print(f"Error executing sell order: {e}")
+            print("Retrying sell order...")
+            # Add a delay before retrying to avoid flooding the exchange with requests
+            time.sleep(5)  # Adjust the delay as needed
+    return order
+
+def limit_buy_order(symbol, price, amount):
+    while True:  # Keep trying until the order is successfully executed
+        try:
+            order = exchange.create_limit_buy_order(
+                symbol=symbol,
+                amount=amount,
+                price=price,
+                params={'createMarketBuyOrderRequiresPrice': False}
+            )
+            print("Buy order successfully executed.")
+            break  # Exit the loop if the order is successfully executed
+        except Exception as e:
+            print(f"Error executing buy order: {e}")
+            print("Retrying buy order...")
+            # Add a delay before retrying to avoid flooding the exchange with requests
+            time.sleep(5)  # Adjust the delay as needed
+    return order
+
+def limit_sell_order(symbol, price, amount):
+    while True:  # Keep trying until the order is successfully executed
+        try:
+            order = exchange.create_limit_sell_order(
+                symbol=symbol,
+                amount=amount,
+                price=price,
+               # params={'createMarketSellOrderRequiresPrice': False}
+            )
+            print("Sell order successfully executed.")
+            break  # Exit the loop if the order is successfully executed
+        except Exception as e:
+            print(f"Error executing sell order: {e}")
+            print("Retrying sell order...")
+            # Add a delay before retrying to avoid flooding the exchange with requests
+            time.sleep(5)  # Adjust the delay as needed
+    return order
+
+def fetch_balances():
+    btc_balance = None
+    usdc_balance = None
+    btc = None
+    usdc = None
+    btcTOusdc = None
+    usdcTObtc= None
+    while True:
+     try :
+        balances = exchange.fetch_balance()
+        spot_balances = balances.get('info', {}).get('balances', [])
+    
+        for asset in spot_balances:
+            if asset['asset'] == 'BTC':
+                btc_balance = float(asset['free'])
+            elif asset['asset'] == 'USDC':
+                usdc_balance = float(asset['free'])
+    
+        if btc_balance is not None and btc_balance != 0:
+            btc_balance -= 0.000010
+    
+        if usdc_balance is not None and usdc_balance != 0:
+            usdc_balance -= 0.5
+        
+        ticker = exchange.fetch_ticker("BTC/USDC")
+        price = ticker["last"]
+        usdcTObtc = usdc_balance / price if usdc_balance is not None else None
+        btcTOusdc = btc_balance * price if btc_balance is not None else None
+        usdcTObtc = "{:.6f}".format(usdcTObtc) if usdcTObtc is not None else None
+        btcTOusdc = "{:.2f}".format(btcTOusdc) if btcTOusdc is not None else None
+        usdc = "{:.2f}".format(usdc_balance) if usdc_balance is not None else None
+        btc =  "{:.6f}".format(btc_balance).rstrip('0').rstrip('.') if btc_balance is not None else None
+        data_dict = {
+            'btc': btc,
+            'usdc': usdc,
+            'btcTOusdc': btcTOusdc,
+            'usdcTObtc': usdcTObtc,
+             }
+        print("Balances Fatched.")
+        break
+     except Exception as e:
+        print(f"Error fatching balances: {e}")
+        print("Retrying ...")
+        # Add a delay before retrying to avoid flooding the exchange with requests
+        time.sleep(5)
+        
+        
+    return (data_dict)
+
+
+# Define your run_program functions here
+def run_program_5():
+    megaseq = fetch_data_ohlcv("BTCUSDC",70, "1h")
+    # Create two copies of megaseq
+    megaseqP = megaseq.copy()
+    megaseqL = megaseq.copy()
+    # Add "P" and "L" to the copies
+    megaseqP.loc[len(megaseqP)-1] = "P"
+    megaseqL.loc[len(megaseqL)-1] = "L"
+    print("processing... for forP")
+    forP = just_do_it(megaseqP)
+    print("Processing... for forL")
+    forL = just_do_it(megaseqL)
+    data1 = []
+    data1 = [forL,forP]
+    return(data1)
+
+def run_program_58(forL,forP,last_pos): 
+    symbol = "BTCUSDC"
+    global already_bought
+    if last_pos == "P":
+        next_prediction_final = forP
+
+    elif last_pos == "L":
+        next_prediction_final = forL
+
+    print(f"Upcoming hour prediction : {next_prediction_final}")
+    if next_prediction_final == "P" and not already_bought:
+        balances = fetch_balances()
+        usdcTObtc = balances['usdcTObtc']
+        usdc = balances['usdc']
+        ticker = exchange.fetch_ticker("BTC/USDC")
+        price = ticker["last"]
+        price +=8
+        print(f"Trying to Buy @{price}")
+        order = limit_buy_order(symbol, price, usdcTObtc)
+        buy_price = price
+        time.sleep(60)
+        order_id = order['id']
+        order_status = exchange.fetch_order(order_id , symbol)
+        status = order_status['status']
+        
+        if status == "open":
+            exchange.cancel_order(order_id , symbol)
+            print("Could not place limit buy order, placing market order")
+            order = market_buy_order(symbol, usdc)
+            already_bought = True
+        elif status == "closed":
+            print("order was filled")
+            already_bought = True
+            
+    elif next_prediction_final == "L" and already_bought:
+        balances = fetch_balances()
+        btc = balances['btc']
+        ticker = exchange.fetch_ticker("BTC/USDC")
+        price = ticker["last"]
+        price -=5
+        print(f"Tring to sell @{price}")
+        order = limit_sell_order(symbol, price, btc)
+        time.sleep(60)
+        order_id = order['id']
+        order_status = exchange.fetch_order(order_id , symbol)
+        status = order_status['status']
+        if status == "open":
+            exchange.cancel_order(order_id , symbol)
+            time.sleep(6)
+            balances = fetch_balances()
+            btc = balances['btc']
+            ticker = exchange.fetch_ticker("BTC/USDC")
+            price = ticker["last"]
+            btcusdcratio = 1/price
+            rate = btcusdcratio*5.5
+            if float(btc) < rate:
+                print("ordr can not be placed(btc < 5usdc).")
+            elif float(btc) > rate:
+                print("Could not place limit sell order, now placing market sell order. ")
+                order= market_sell_order(symbol , btc )
+            already_bought = False
+        elif status == "closed":
+            print("Order Was filled")       
+
+            already_bought = False
+    print("Waiting for Next hour...")
+    
+    return(next_final_prediction)
+
+
+next_final_prediction = "L"
+right = 61
+wrong = 75
+already_bought = False
+result = run_program_5()
+# forL= result[0]
+# forP = result[1]
+print("data processing complete waiting for 58th minute")
+while True:
+    current_time = time.localtime()
+    if current_time.tm_min == 5:
+        result = run_program_5()
+        forL= result[0]
+        forP = result[1]
+        print("data processing complete waiting for 58th minute")
+        time.sleep(10)  # Wait until the end of the minute
+    elif current_time.tm_min == 58:
+        seq = fetch_data_ohlcv("BTCUSDC",1, "1h")
+        print(f"this hour last 5 : {(seq.tail(5))}")
+        last_pos = seq[len(seq)-1]
+        if next_final_prediction == last_pos:
+            right+=1
+            print(f"last prediction was right, predicted {next_final_prediction} and last position was {last_pos}, Total right/wrong predictions = {right}/{wrong}")
+        elif next_final_prediction != last_pos:
+            wrong+=1
+            print(f"Last prediction was wrong, predicted {next_final_prediction} and last position was {last_pos}, Total right/wrong predictions = {right}/{wrong}")
+        next_final_prediction = run_program_58(forL,forP,last_pos)
+        print("waiting fot 5th minute")
+        time.sleep(60)  # Wait until the end of the minute
+    else:
+        time.sleep(10)
